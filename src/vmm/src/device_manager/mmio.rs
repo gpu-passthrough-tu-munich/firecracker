@@ -21,20 +21,22 @@ use serde::{Deserialize, Serialize};
 use vm_allocator::AllocPolicy;
 
 use super::resources::ResourceAllocator;
-use crate::arch::DeviceType;
 use crate::arch::DeviceType::Virtio;
-use crate::devices::BusDevice;
+#[cfg(target_arch = "aarch64")]
+use crate::arch::aarch64::DeviceInfoForFDT;
+use crate::arch::{self, DeviceType};
 #[cfg(target_arch = "aarch64")]
 use crate::devices::legacy::RTCDevice;
 use crate::devices::pseudo::BootTimer;
 use crate::devices::virtio::balloon::Balloon;
 use crate::devices::virtio::block::device::Block;
-use crate::devices::virtio::device::VirtioDevice;
-use crate::devices::virtio::mmio::MmioTransport;
+use crate::devices::virtio::device::{VirtioDevice, VirtioInterruptType};
 use crate::devices::virtio::net::Net;
 use crate::devices::virtio::rng::Entropy;
+use crate::devices::virtio::transport::MmioTransport;
 use crate::devices::virtio::vsock::{TYPE_VSOCK, Vsock, VsockUnixBackend};
 use crate::devices::virtio::{TYPE_BALLOON, TYPE_BLOCK, TYPE_NET, TYPE_RNG};
+use crate::devices::{BusDevice, BusError};
 #[cfg(target_arch = "x86_64")]
 use crate::vstate::memory::GuestAddress;
 
@@ -62,6 +64,8 @@ pub enum MmioError {
     #[cfg(target_arch = "x86_64")]
     /// Failed to create AML code for device
     AmlError(#[from] aml::AmlError),
+    /// Unknown TODO
+    Unknown,
 }
 
 /// This represents the size of the mmio device specified to the kernel through ACPI and as a
@@ -120,6 +124,7 @@ fn add_virtio_aml(
 #[derive(Debug)]
 pub struct MMIODeviceManager {
     pub(crate) bus: crate::devices::Bus,
+    pci_bus: Option<Arc<Mutex<BusDevice>>>,
     pub(crate) id_to_dev_info: HashMap<(DeviceType, String), MMIODeviceInfo>,
     // We create the AML byte code for every VirtIO device in the order we build
     // it, so that we ensure the root block device is appears first in the DSDT.
@@ -136,6 +141,7 @@ impl MMIODeviceManager {
     /// Create a new DeviceManager handling mmio devices (virtio net, block).
     pub fn new() -> MMIODeviceManager {
         MMIODeviceManager {
+            pci_bus: None,
             bus: crate::devices::Bus::new(),
             id_to_dev_info: HashMap::new(),
             #[cfg(target_arch = "x86_64")]
@@ -165,6 +171,19 @@ impl MMIODeviceManager {
             irq,
         };
         Ok(device_info)
+    }
+
+    /// Register the PCI bus.
+    pub fn register_pci_bus(&mut self, pci_bus: Arc<Mutex<BusDevice>>) -> Result<(), MmioError> {
+        self.bus
+            .insert(
+                Arc::clone(&pci_bus),
+                arch::PCI_MMCONFIG_START,
+                arch::PCI_MMCONFIG_SIZE,
+            )
+            .map_err(MmioError::BusInsert)?;
+        self.pci_bus = Some(pci_bus);
+        Ok(())
     }
 
     /// Register a device at some MMIO address.
@@ -205,8 +224,14 @@ impl MMIODeviceManager {
                 vm.register_ioevent(queue_evt, &io_addr, u32::try_from(i).unwrap())
                     .map_err(MmioError::RegisterIoEvent)?;
             }
-            vm.register_irqfd(&locked_device.interrupt_trigger().irq_evt, irq.get())
-                .map_err(MmioError::RegisterIrqFd)?;
+            vm.register_irqfd(
+                &locked_device
+                    .interrupt()
+                    .notifier(VirtioInterruptType::Queue(0))
+                    .expect("mmio device should have evenfd"),
+                device_info.irq.unwrap().into(),
+            )
+            .map_err(MmioError::RegisterIrqFd)?;
         }
 
         self.register_mmio_device(
@@ -368,12 +393,12 @@ impl MMIODeviceManager {
         &self,
         device_type: DeviceType,
         device_id: &str,
-    ) -> Option<&Mutex<BusDevice>> {
+    ) -> Option<Arc<Mutex<BusDevice>>> {
         if let Some(device_info) = self
             .id_to_dev_info
             .get(&(device_type, device_id.to_string()))
         {
-            if let Some((_, device)) = self.bus.get_device(device_info.addr) {
+            if let Some((_, _, device)) = self.bus.get_device(device_info.addr) {
                 return Some(device);
             }
         }
@@ -383,7 +408,7 @@ impl MMIODeviceManager {
     /// Run fn for each registered device.
     pub fn for_each_device<F, E: Debug>(&self, mut f: F) -> Result<(), E>
     where
-        F: FnMut(&DeviceType, &String, &MMIODeviceInfo, &Mutex<BusDevice>) -> Result<(), E>,
+        F: FnMut(&DeviceType, &String, &MMIODeviceInfo, Arc<Mutex<BusDevice>>) -> Result<(), E>,
     {
         for ((device_type, device_id), device_info) in self.get_device_info().iter() {
             let bus_device = self
@@ -503,7 +528,7 @@ impl MMIODeviceManager {
                             .unwrap();
                         if vsock.is_activated() {
                             info!("kick vsock {id}.");
-                            vsock.signal_used_queue().unwrap();
+                            vsock.signal_used_queue(1).unwrap();
                         }
                     }
                     TYPE_RNG => {

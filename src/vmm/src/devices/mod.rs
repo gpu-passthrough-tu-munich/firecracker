@@ -12,6 +12,7 @@ use std::io;
 pub mod acpi;
 pub mod bus;
 pub mod legacy;
+pub mod pci_segment;
 pub mod pseudo;
 pub mod virtio;
 

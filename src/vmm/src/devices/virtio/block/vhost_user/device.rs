@@ -389,7 +389,7 @@ mod tests {
 
     use super::*;
     use crate::devices::virtio::block::virtio::device::FileEngineType;
-    use crate::devices::virtio::mmio::VIRTIO_MMIO_INT_CONFIG;
+    use crate::devices::virtio::transport::mmio::VIRTIO_MMIO_INT_CONFIG;
     use crate::test_utils::create_tmp_socket;
     use crate::vstate::memory::{GuestAddress, GuestMemoryExtension};
 
@@ -797,7 +797,7 @@ mod tests {
                 .unwrap();
 
         // During actiavion of the device features, memory and queues should be set and activated.
-        vhost_block.activate(guest_memory).unwrap();
+        vhost_block.activate(guest_memory, None).unwrap();
         assert!(unsafe { *vhost_block.vu_handle.vu.features_are_set.get() });
         assert!(unsafe { *vhost_block.vu_handle.vu.memory_is_set.get() });
         assert!(unsafe { *vhost_block.vu_handle.vu.vring_enabled.get() });

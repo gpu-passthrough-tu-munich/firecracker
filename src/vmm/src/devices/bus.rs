@@ -7,15 +7,19 @@
 
 //! Handles routing to devices in an address space.
 
+use std::any::Any;
 use std::cmp::{Ord, Ordering, PartialEq, PartialOrd};
 use std::collections::btree_map::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::result::Result;
+use std::sync::{Arc, Barrier, Mutex, RwLock};
 
 /// Errors triggered during bus operations.
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum BusError {
-    /// New device overlaps with an old device.
+    /// The insertion failed because the new device overlapped with an old device.
     Overlap,
+    /// The relocation failed because no device was mapped at the address
+    MissingAddressRange,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -47,16 +51,23 @@ impl PartialOrd for BusRange {
 /// only restriction is that no two devices can overlap in this address space.
 #[derive(Debug, Clone, Default)]
 pub struct Bus {
-    devices: BTreeMap<BusRange, Arc<Mutex<BusDevice>>>,
+    devices: Arc<RwLock<BTreeMap<BusRange, Arc<Mutex<BusDevice>>>>>,
 }
 
 use event_manager::{EventOps, Events, MutEventSubscriber};
+use pci::device::Error as PciDeviceError;
+use pci::{
+    BarReprogrammingParams, PciBarConfiguration, PciConfigIo, PciConfigMmio, PciDevice, PciRoot,
+    VfioPciDevice,
+};
+use vm_device::Resource;
+use vm_system_allocator::{AddressAllocator, SystemAllocator};
 
 #[cfg(target_arch = "aarch64")]
 use super::legacy::RTCDevice;
 use super::legacy::{I8042Device, SerialDevice};
 use super::pseudo::BootTimer;
-use super::virtio::mmio::MmioTransport;
+use super::virtio::transport::{MmioTransport, VirtioPciDevice};
 
 #[derive(Debug)]
 pub enum BusDevice {
@@ -66,6 +77,10 @@ pub enum BusDevice {
     BootTimer(BootTimer),
     MmioTransport(MmioTransport),
     Serial(SerialDevice<std::io::Stdin>),
+    PioPciBus(PciConfigIo),
+    MmioPciBus(PciConfigMmio),
+    VfioPciDevice(VfioPciDevice),
+    VirtioPciDevice(VirtioPciDevice),
     #[cfg(test)]
     Dummy(DummyDevice),
     #[cfg(test)]
@@ -165,8 +180,70 @@ impl BusDevice {
             _ => None,
         }
     }
+    pub fn vfio_pci_device_ref(&self) -> Option<&VfioPciDevice> {
+        match self {
+            Self::VfioPciDevice(x) => Some(x),
+            _ => None,
+        }
+    }
+    pub fn vfio_pci_device_mut(&mut self) -> Option<&mut VfioPciDevice> {
+        match self {
+            Self::VfioPciDevice(x) => Some(x),
+            _ => None,
+        }
+    }
+    pub fn virtio_pci_device_ref(&self) -> Option<&VirtioPciDevice> {
+        match self {
+            Self::VirtioPciDevice(x) => Some(x),
+            _ => None,
+        }
+    }
+    pub fn virtio_pci_device_mut(&mut self) -> Option<&mut VirtioPciDevice> {
+        match self {
+            Self::VirtioPciDevice(x) => Some(x),
+            _ => None,
+        }
+    }
+    pub fn pci_device_ref(&self) -> Option<&dyn PciDevice> {
+        match self {
+            Self::VfioPciDevice(x) => Some(x),
+            Self::VirtioPciDevice(x) => Some(x),
+            _ => None,
+        }
+    }
+    pub fn pci_device_mut(&mut self) -> Option<&mut dyn PciDevice> {
+        match self {
+            Self::VfioPciDevice(x) => Some(x),
+            Self::VirtioPciDevice(x) => Some(x),
+            _ => None,
+        }
+    }
+    pub fn pci_config_io_ref(&self) -> Option<&PciConfigIo> {
+        match self {
+            Self::PioPciBus(x) => Some(x),
+            _ => None,
+        }
+    }
+    pub fn pci_config_io_mut(&mut self) -> Option<&mut PciConfigIo> {
+        match self {
+            Self::PioPciBus(x) => Some(x),
+            _ => None,
+        }
+    }
+    pub fn pci_config_mmio_ref(&self) -> Option<&PciConfigMmio> {
+        match self {
+            Self::MmioPciBus(x) => Some(x),
+            _ => None,
+        }
+    }
+    pub fn pci_config_mmio_mut(&mut self) -> Option<&mut PciConfigMmio> {
+        match self {
+            Self::MmioPciBus(x) => Some(x),
+            _ => None,
+        }
+    }
 
-    pub fn read(&mut self, offset: u64, data: &mut [u8]) {
+    pub fn read(&mut self, base: u64, offset: u64, data: &mut [u8]) {
         match self {
             Self::I8042Device(x) => x.bus_read(offset, data),
             #[cfg(target_arch = "aarch64")]
@@ -174,6 +251,10 @@ impl BusDevice {
             Self::BootTimer(x) => x.bus_read(offset, data),
             Self::MmioTransport(x) => x.bus_read(offset, data),
             Self::Serial(x) => x.bus_read(offset, data),
+            Self::VfioPciDevice(x) => x.bus_read(base, offset, data),
+            Self::VirtioPciDevice(x) => x.bus_read(base, offset, data),
+            Self::MmioPciBus(x) => x.bus_read(base, offset, data),
+            Self::PioPciBus(x) => x.bus_read(base, offset, data),
             #[cfg(test)]
             Self::Dummy(x) => x.bus_read(offset, data),
             #[cfg(test)]
@@ -181,7 +262,7 @@ impl BusDevice {
         }
     }
 
-    pub fn write(&mut self, offset: u64, data: &[u8]) {
+    pub fn write(&mut self, base: u64, offset: u64, data: &[u8]) {
         match self {
             Self::I8042Device(x) => x.bus_write(offset, data),
             #[cfg(target_arch = "aarch64")]
@@ -189,11 +270,94 @@ impl BusDevice {
             Self::BootTimer(x) => x.bus_write(offset, data),
             Self::MmioTransport(x) => x.bus_write(offset, data),
             Self::Serial(x) => x.bus_write(offset, data),
+            Self::VfioPciDevice(x) => x.bus_write(base, offset, data),
+            Self::VirtioPciDevice(x) => x.bus_write(base, offset, data),
+            Self::MmioPciBus(x) => x.bus_write(base, offset, data),
+            Self::PioPciBus(x) => x.bus_write(base, offset, data),
             #[cfg(test)]
             Self::Dummy(x) => x.bus_write(offset, data),
             #[cfg(test)]
             Self::Constant(x) => x.bus_write(offset, data),
         }
+    }
+}
+
+// TODO: hack to make pci crate compatible with firecracker BusDevices
+type PciDeviceResult<T> = Result<T, PciDeviceError>;
+impl PciDevice for BusDevice {
+    fn allocate_bars(
+        &mut self,
+        allocator: &Arc<Mutex<SystemAllocator>>,
+        mmio32_allocator: &mut AddressAllocator,
+        mmio64_allocator: &mut AddressAllocator,
+        resources: Option<Vec<Resource>>,
+    ) -> PciDeviceResult<Vec<PciBarConfiguration>> {
+        self.pci_device_mut().unwrap().allocate_bars(
+            allocator,
+            mmio32_allocator,
+            mmio64_allocator,
+            resources,
+        )
+    }
+
+    fn free_bars(
+        &mut self,
+        allocator: &mut SystemAllocator,
+        mmio32_allocator: &mut AddressAllocator,
+        mmio64_allocator: &mut AddressAllocator,
+    ) -> PciDeviceResult<()> {
+        self.pci_device_mut()
+            .unwrap()
+            .free_bars(allocator, mmio32_allocator, mmio64_allocator)
+    }
+
+    fn write_config_register(
+        &mut self,
+        reg_idx: usize,
+        offset: u64,
+        data: &[u8],
+    ) -> Option<Arc<Barrier>> {
+        self.pci_device_mut()
+            .unwrap()
+            .write_config_register(reg_idx, offset, data)
+    }
+
+    fn read_config_register(&mut self, reg_idx: usize) -> u32 {
+        self.pci_device_mut().unwrap().read_config_register(reg_idx)
+    }
+
+    fn detect_bar_reprogramming(
+        &mut self,
+        reg_idx: usize,
+        data: &[u8],
+    ) -> Option<BarReprogrammingParams> {
+        self.pci_device_mut()
+            .unwrap()
+            .detect_bar_reprogramming(reg_idx, data)
+    }
+
+    fn read_bar(&mut self, base: u64, offset: u64, data: &mut [u8]) {
+        self.pci_device_mut().unwrap().read_bar(base, offset, data)
+    }
+
+    fn write_bar(&mut self, base: u64, offset: u64, data: &[u8]) -> Option<Arc<Barrier>> {
+        self.pci_device_mut().unwrap().write_bar(base, offset, data)
+    }
+
+    fn move_bar(
+        &mut self,
+        old_base: u64,
+        new_base: u64,
+    ) -> std::result::Result<(), std::io::Error> {
+        self.pci_device_mut().unwrap().move_bar(old_base, new_base)
+    }
+
+    fn as_any(&mut self) -> &mut dyn Any {
+        self.pci_device_mut().unwrap().as_any()
+    }
+
+    fn id(&self) -> Option<String> {
+        self.pci_device_ref().unwrap().id()
     }
 }
 
@@ -216,26 +380,25 @@ impl Bus {
     /// Constructs an a bus with an empty address space.
     pub fn new() -> Bus {
         Bus {
-            devices: BTreeMap::new(),
+            devices: Arc::new(RwLock::new(BTreeMap::new())),
         }
     }
 
-    fn first_before(&self, addr: u64) -> Option<(BusRange, &Mutex<BusDevice>)> {
+    fn first_before(&self, addr: u64) -> Option<(BusRange, Arc<Mutex<BusDevice>>)> {
         // for when we switch to rustc 1.17: self.devices.range(..addr).iter().rev().next()
-        for (range, dev) in self.devices.iter().rev() {
+        for (range, dev) in self.devices.read().unwrap().iter().rev() {
             if range.0 <= addr {
-                return Some((*range, dev));
+                return Some((*range, dev.clone()));
             }
         }
         None
     }
 
-    /// Returns the device found at some address.
-    pub fn get_device(&self, addr: u64) -> Option<(u64, &Mutex<BusDevice>)> {
+    pub fn get_device(&self, addr: u64) -> Option<(u64, u64, Arc<Mutex<BusDevice>>)> {
         if let Some((BusRange(start, len), dev)) = self.first_before(addr) {
             let offset = addr - start;
             if offset < len {
-                return Some((offset, dev));
+                return Some((start, offset, dev));
             }
         }
         None
@@ -243,7 +406,7 @@ impl Bus {
 
     /// Puts the given device at the given address space.
     pub fn insert(
-        &mut self,
+        &self,
         device: Arc<Mutex<BusDevice>>,
         base: u64,
         len: u64,
@@ -269,10 +432,24 @@ impl Bus {
             }
         }
 
-        if self.devices.insert(BusRange(base, len), device).is_some() {
+        if self
+            .devices
+            .write()
+            .unwrap()
+            .insert(BusRange(base, len), device)
+            .is_some()
+        {
             return Err(BusError::Overlap);
         }
 
+        Ok(())
+    }
+
+    pub fn remove(&self, base: u64, len: u64) -> Result<(), BusError> {
+        let range = BusRange(base, len);
+        if self.devices.write().unwrap().remove(&range).is_none() {
+            return Err(BusError::MissingAddressRange);
+        }
         Ok(())
     }
 
@@ -280,11 +457,11 @@ impl Bus {
     ///
     /// Returns true on success, otherwise `data` is untouched.
     pub fn read(&self, addr: u64, data: &mut [u8]) -> bool {
-        if let Some((offset, dev)) = self.get_device(addr) {
+        if let Some((base, offset, dev)) = self.get_device(addr) {
             // OK to unwrap as lock() failing is a serious error condition and should panic.
             dev.lock()
                 .expect("Failed to acquire device lock")
-                .read(offset, data);
+                .read(base, offset, data);
             true
         } else {
             false
@@ -295,15 +472,37 @@ impl Bus {
     ///
     /// Returns true on success, otherwise `data` is untouched.
     pub fn write(&self, addr: u64, data: &[u8]) -> bool {
-        if let Some((offset, dev)) = self.get_device(addr) {
+        if let Some((base, offset, dev)) = self.get_device(addr) {
             // OK to unwrap as lock() failing is a serious error condition and should panic.
             dev.lock()
                 .expect("Failed to acquire device lock")
-                .write(offset, data);
+                .write(base, offset, data);
             true
         } else {
             false
         }
+    }
+
+    /// Updates the address range for an existing device.
+    pub fn update_range(
+        &self,
+        old_base: u64,
+        old_len: u64,
+        new_base: u64,
+        new_len: u64,
+    ) -> Result<(), BusError> {
+        // Retrieve the device corresponding to the range
+        let device = if let Some((_, _, dev)) = self.get_device(old_base) {
+            dev.clone()
+        } else {
+            return Err(BusError::MissingAddressRange);
+        };
+
+        // Remove the old address range
+        self.remove(old_base, old_len)?;
+
+        // Insert the new address range
+        self.insert(device, new_base, new_len)
     }
 }
 

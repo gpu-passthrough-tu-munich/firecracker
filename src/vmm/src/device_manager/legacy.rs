@@ -13,6 +13,7 @@ use acpi_tables::aml::AmlError;
 use acpi_tables::{Aml, aml};
 use kvm_ioctls::VmFd;
 use libc::EFD_NONBLOCK;
+use pci::{PCI_CONFIG_IO_PORT, PCI_CONFIG_IO_PORT_SIZE};
 use vm_superio::Serial;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -39,6 +40,7 @@ pub struct PortIODeviceManager {
     pub stdio_serial: Arc<Mutex<BusDevice>>,
     // BusDevice::I8042Device
     pub i8042: Arc<Mutex<BusDevice>>,
+    pub pci_bus: Option<Arc<Mutex<BusDevice>>>,
 
     // Communication event on ports 1 & 3.
     pub com_evt_1_3: EventFdTrigger,
@@ -97,10 +99,15 @@ impl PortIODeviceManager {
             io_bus,
             stdio_serial: serial,
             i8042,
+            pci_bus: None,
             com_evt_1_3,
             com_evt_2_4,
             kbd_evt,
         })
+    }
+
+    pub fn put_pci_bus(&mut self, pci_bus: Arc<Mutex<BusDevice>>) {
+        self.pci_bus = Some(pci_bus);
     }
 
     /// Register supported legacy devices.
@@ -125,6 +132,10 @@ impl PortIODeviceManager {
             ),
             input: None,
         })));
+        if let Some(ref pci_bus) = self.pci_bus {
+            self.io_bus
+                .insert(pci_bus.clone(), PCI_CONFIG_IO_PORT, PCI_CONFIG_IO_PORT_SIZE)?;
+        }
         self.io_bus.insert(
             self.stdio_serial.clone(),
             Self::SERIAL_PORT_ADDRESSES[0],

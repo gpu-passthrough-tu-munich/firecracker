@@ -33,7 +33,7 @@ pub mod generated;
 
 use std::fs::File;
 
-use layout::CMDLINE_START;
+use layout::{CMDLINE_START, PCI_MMCONFIG_SIZE};
 use linux_loader::configurator::linux::LinuxBootConfigurator;
 use linux_loader::configurator::pvh::PvhBootConfigurator;
 use linux_loader::configurator::{BootConfigurator, BootParams};
@@ -45,7 +45,7 @@ use linux_loader::loader::elf::start_info::{
 use linux_loader::loader::{Cmdline, KernelLoader, PvhBootCapability, load_cmdline};
 use log::debug;
 
-use super::EntryPoint;
+use super::{EntryPoint, PCI_MMCONFIG_START};
 use crate::acpi::create_acpi_tables;
 use crate::arch::{BootProtocol, SYSTEM_MEM_SIZE, SYSTEM_MEM_START};
 use crate::cpu_config::templates::{CustomCpuTemplate, GuestConfigError};
@@ -215,6 +215,8 @@ pub fn configure_system_for_boot(
         &mut vmm.resource_allocator,
         &vmm.mmio_device_manager,
         &vmm.acpi_device_manager,
+        vmm.pci_segment.as_ref(),
+        PCI_MMCONFIG_START,
         vcpus,
     )?;
     Ok(())
@@ -256,6 +258,12 @@ fn configure_pvh(
     memmap.push(hvm_memmap_table_entry {
         addr: SYSTEM_MEM_START,
         size: SYSTEM_MEM_SIZE,
+        type_: E820_RESERVED,
+        ..Default::default()
+    });
+    memmap.push(hvm_memmap_table_entry {
+        addr: layout::PCI_MMCONFIG_START,
+        size: PCI_MMCONFIG_SIZE,
         type_: E820_RESERVED,
         ..Default::default()
     });
@@ -359,6 +367,13 @@ fn configure_64bit_boot(
         &mut params,
         layout::SYSTEM_MEM_START,
         layout::SYSTEM_MEM_SIZE,
+        E820_RESERVED,
+    )?;
+
+    add_e820_entry(
+        &mut params,
+        layout::PCI_MMCONFIG_START,
+        PCI_MMCONFIG_SIZE,
         E820_RESERVED,
     )?;
 

@@ -1,6 +1,9 @@
 // Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+#![deny(missing_docs)]
+//! Implements platform specific functionality.
+//! Supported platforms: x86_64 and aarch64.
 use std::fmt;
 use std::sync::LazyLock;
 
@@ -42,7 +45,8 @@ pub use crate::arch::x86_64::{
     ConfigurationError, MMIO_MEM_SIZE, MMIO_MEM_START, arch_memory_regions,
     configure_system_for_boot, get_kernel_start, initrd_load_addr, layout::APIC_ADDR,
     layout::CMDLINE_MAX_SIZE, layout::IOAPIC_ADDR, layout::IRQ_BASE, layout::IRQ_MAX,
-    layout::SYSTEM_MEM_SIZE, layout::SYSTEM_MEM_START, load_kernel,
+    layout::MEM_32BIT_DEVICES_SIZE, layout::MEM_32BIT_DEVICES_START, layout::PCI_MMCONFIG_SIZE,
+    layout::PCI_MMCONFIG_START, layout::SYSTEM_MEM_SIZE, layout::SYSTEM_MEM_START,
 };
 
 /// Types of devices that can get attached to this platform.

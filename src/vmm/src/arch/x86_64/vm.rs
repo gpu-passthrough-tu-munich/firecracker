@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::fmt;
+use std::os::unix::io::AsRawFd;
 
 use kvm_bindings::{
     KVM_CLOCK_TSC_STABLE, KVM_IRQCHIP_IOAPIC, KVM_IRQCHIP_PIC_MASTER, KVM_IRQCHIP_PIC_SLAVE,
@@ -59,7 +60,7 @@ pub struct ArchVm {
 
 impl ArchVm {
     /// Create a new `Vm` struct.
-    pub fn new(kvm: &crate::vstate::kvm::Kvm) -> Result<ArchVm, VmError> {
+    pub fn new(kvm: &crate::vstate::kvm::Kvm) -> Result<(Self, VmFd), VmError> {
         let fd = Self::create_vm(kvm)?;
 
         let msrs_to_save = kvm.msrs_to_save().map_err(ArchVmError::GetMsrsToSave)?;
@@ -87,11 +88,16 @@ impl ArchVm {
         fd.set_tss_address(u64_to_usize(crate::arch::x86_64::layout::KVM_TSS_ADDRESS))
             .map_err(ArchVmError::SetTssAddress)?;
 
-        Ok(ArchVm {
-            fd,
-            msrs_to_save,
-            xsave2_size,
-        })
+        let rawfd = unsafe { libc::dup(fd.as_raw_fd()) };
+        let extra_fd = unsafe { kvm.fd.create_vmfd_from_rawfd(rawfd).unwrap() };
+        Ok((
+            ArchVm {
+                fd,
+                msrs_to_save,
+                xsave2_size,
+            },
+            extra_fd,
+        ))
     }
 
     /// Pre-vCPU creation setup.

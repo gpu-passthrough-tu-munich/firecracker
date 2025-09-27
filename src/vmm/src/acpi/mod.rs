@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use acpi_tables::fadt::{FADT_F_HW_REDUCED_ACPI, FADT_F_PWR_BUTTON, FADT_F_SLP_BUTTON};
-use acpi_tables::{Aml, Dsdt, Fadt, Madt, Rsdp, Sdt, Xsdt, aml};
+use acpi_tables::{Aml, Dsdt, Fadt, Madt, Mcfg, Rsdp, Sdt, Xsdt, aml};
 use log::{debug, error};
 use vm_allocator::AllocPolicy;
 
@@ -13,6 +13,7 @@ use crate::acpi::x86_64::{
 use crate::device_manager::acpi::ACPIDeviceManager;
 use crate::device_manager::mmio::MMIODeviceManager;
 use crate::device_manager::resources::ResourceAllocator;
+use crate::devices::pci_segment::PciSegment;
 use crate::vstate::memory::{GuestAddress, GuestMemoryMmap};
 
 mod x86_64;
@@ -80,6 +81,7 @@ impl AcpiTableWriter<'_> {
     fn build_dsdt(
         &mut self,
         mmio_device_manager: &MMIODeviceManager,
+        pci_segment: Option<&PciSegment>,
         acpi_device_manager: &ACPIDeviceManager,
     ) -> Result<u64, AcpiError> {
         let mut dsdt_data = Vec::new();
@@ -92,6 +94,10 @@ impl AcpiTableWriter<'_> {
 
         // Architecture specific DSDT data
         setup_arch_dsdt(&mut dsdt_data)?;
+
+        if let Some(pci_segment) = pci_segment {
+            pci_segment.append_aml_bytes(&mut dsdt_data);
+        }
 
         let mut dsdt = Dsdt::new(OEM_ID, *b"FCVMDSDT", OEM_REVISION, dsdt_data);
         self.write_acpi_table(&mut dsdt)
@@ -128,14 +134,27 @@ impl AcpiTableWriter<'_> {
     /// Build the XSDT table for the guest
     ///
     /// Currently, we pass to the guest just FADT and MADT tables.
-    fn build_xsdt(&mut self, fadt_addr: u64, madt_addr: u64) -> Result<u64, AcpiError> {
-        let mut xsdt = Xsdt::new(
-            OEM_ID,
-            *b"FCMVXSDT",
-            OEM_REVISION,
-            vec![fadt_addr, madt_addr],
-        );
+    fn build_xsdt(
+        &mut self,
+        fadt_addr: u64,
+        madt_addr: u64,
+        mcfg_addr: Option<u64>,
+    ) -> Result<u64, AcpiError> {
+        let tables = if let Some(mcfg_addr) = mcfg_addr {
+            vec![fadt_addr, madt_addr, mcfg_addr]
+        } else {
+            vec![fadt_addr, madt_addr]
+        };
+        let mut xsdt = Xsdt::new(OEM_ID, *b"FCMVXSDT", OEM_REVISION, tables);
         self.write_acpi_table(&mut xsdt)
+    }
+
+    /// Build the XSDT table for the guest
+    ///
+    /// Currently, we pass to the guest just FADT and MADT tables.
+    fn build_mcfg(&mut self, pci_mmio_config_addr: u64) -> Result<u64, AcpiError> {
+        let mut mcfg = Mcfg::new(OEM_ID, *b"CHMCFG  ", OEM_REVISION, pci_mmio_config_addr);
+        self.write_acpi_table(&mut mcfg)
     }
 
     /// Build the RSDP pointer for the guest.
@@ -166,6 +185,8 @@ pub(crate) fn create_acpi_tables(
     resource_allocator: &mut ResourceAllocator,
     mmio_device_manager: &MMIODeviceManager,
     acpi_device_manager: &ACPIDeviceManager,
+    pci_segment: Option<&PciSegment>,
+    pci_mmio_config_addr: u64,
     vcpus: &[Vcpu],
 ) -> Result<(), AcpiError> {
     let mut writer = AcpiTableWriter {
@@ -173,10 +194,13 @@ pub(crate) fn create_acpi_tables(
         resource_allocator,
     };
 
-    let dsdt_addr = writer.build_dsdt(mmio_device_manager, acpi_device_manager)?;
+    let dsdt_addr = writer.build_dsdt(mmio_device_manager, pci_segment, acpi_device_manager)?;
     let fadt_addr = writer.build_fadt(dsdt_addr)?;
     let madt_addr = writer.build_madt(vcpus.len().try_into().unwrap())?;
-    let xsdt_addr = writer.build_xsdt(fadt_addr, madt_addr)?;
+    let mcfg_addr = pci_segment
+        .map(|_| writer.build_mcfg(pci_mmio_config_addr))
+        .transpose()?;
+    let xsdt_addr = writer.build_xsdt(fadt_addr, madt_addr, mcfg_addr)?;
     writer.build_rsdp(xsdt_addr)
 }
 
