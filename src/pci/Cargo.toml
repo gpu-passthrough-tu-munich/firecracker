@@ -1,0 +1,26 @@
+[package]
+authors = ["Samuel Ortiz <sameo@linux.intel.com>"]
+edition = "2021"
+name = "pci"
+version = "0.1.0"
+
+[features]
+default = []
+kvm = ["vfio-ioctls/kvm"]
+mshv = ["vfio-ioctls/mshv"]
+
+[dependencies]
+anyhow = "1.0.87"
+byteorder = "1.5.0"
+vmm-sys-util = ">=0.3.1"
+libc = "0.2.158"
+log = { version = "0.4.22", features = ["std", "serde"] }
+vm-memory = { version = "0.16.1", features = ["backend-mmap", "backend-bitmap"] }
+vfio-ioctls = {  git = "https://github.com/egemetin27/vfio", commit = "4b940e0" }
+vfio-bindings = {  git = "https://github.com/egemetin27/vfio", commit = "4b940e0", features = ["fam-wrappers"] }
+serde = { version = "1.0.208", features = ["derive"] }
+thiserror = "1.0.62"
+kvm-bindings = { version = "0.11.1", features = ["fam-wrappers"] }
+kvm-ioctls = "0.21.0"
+vm-device = { path = "../vm-device"}
+vm-system-allocator = { path = "../vm-system-allocator" }
