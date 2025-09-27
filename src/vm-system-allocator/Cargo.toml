@@ -1,0 +1,9 @@
+[package]
+name = "vm-system-allocator"
+authors = ["The Chromium OS Authors"]
+edition = "2021"
+version = "0.1.0"
+
+[dependencies]
+libc = "0.2.159"
+vm-memory = "0.16.1"
