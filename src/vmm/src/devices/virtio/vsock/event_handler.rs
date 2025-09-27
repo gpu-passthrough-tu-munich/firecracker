@@ -191,8 +191,18 @@ where
                 Self::PROCESS_NOTIFY_BACKEND => raise_irq = self.notify_backend(evset),
                 _ => warn!("Unexpected vsock event received: {:?}", source),
             }
+            let mut queue_index = 0;
+            match source {
+                Self::PROCESS_ACTIVATE => self.handle_activate_event(ops),
+                Self::PROCESS_RXQ => queue_index = RXQ_INDEX,
+                Self::PROCESS_TXQ => queue_index = TXQ_INDEX,
+                Self::PROCESS_EVQ => queue_index = EVQ_INDEX,
+                Self::PROCESS_NOTIFY_BACKEND => queue_index = TXQ_INDEX, // TODO this could be
+                // either tx or rx
+                _ => warn!("Unexpected vsock event received: {:?}", source),
+            }
             if raise_irq {
-                self.signal_used_queue().unwrap_or_default();
+                self.signal_used_queue(queue_index).unwrap_or_default();
             }
         } else {
             warn!(

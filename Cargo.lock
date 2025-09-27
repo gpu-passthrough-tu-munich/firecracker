@@ -113,6 +113,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.100"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
+
+[[package]]
 name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -968,6 +974,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
+name = "mshv-bindings"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd4aa8157010f69f380a86a0ba087167b0a01e2e3f2bcca5b576bd26a9206dc8"
+dependencies = [
+ "libc",
+ "num_enum",
+ "serde",
+ "serde_derive",
+ "vmm-sys-util",
+ "zerocopy 0.8.24",
+]
+
+[[package]]
+name = "mshv-ioctls"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2bdc151fdc265efbb20f6c74e235dcdbce9a54e695655ac88b4db7385b26319"
+dependencies = [
+ "libc",
+ "mshv-bindings",
+ "thiserror 2.0.12",
+ "vmm-sys-util",
+]
+
+[[package]]
 name = "nix"
 version = "0.27.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -998,6 +1030,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "num_enum"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a973b4e44ce6cad84ce69d797acf9a044532e4184c4f267913d1b546a0727b7a"
+dependencies = [
+ "num_enum_derive",
+ "rustversion",
+]
+
+[[package]]
+name = "num_enum_derive"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77e878c846a8abae00dd069496dbe8751b16ac1c3d6bd2a7283a938e8228f90d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1020,6 +1073,26 @@ name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
+name = "pci"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "byteorder",
+ "kvm-bindings",
+ "kvm-ioctls",
+ "libc",
+ "log",
+ "serde",
+ "thiserror 1.0.69",
+ "vfio-bindings",
+ "vfio-ioctls",
+ "vm-device",
+ "vm-memory",
+ "vm-system-allocator",
+ "vmm-sys-util",
+]
 
 [[package]]
 name = "peeking_take_while"
@@ -1236,6 +1309,12 @@ dependencies = [
  "linux-raw-sys",
  "windows-sys",
 ]
+
+[[package]]
+name = "rustversion"
+version = "1.0.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "ryu"
@@ -1573,6 +1652,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "vfio-bindings"
+version = "0.4.0"
+source = "git+https://github.com/egemetin27/vfio#4b940e0e0473c4beeaa9eaf9cff38eae35b50ac7"
+dependencies = [
+ "vmm-sys-util",
+]
+
+[[package]]
+name = "vfio-ioctls"
+version = "0.2.0"
+source = "git+https://github.com/egemetin27/vfio#4b940e0e0473c4beeaa9eaf9cff38eae35b50ac7"
+dependencies = [
+ "byteorder",
+ "kvm-bindings",
+ "kvm-ioctls",
+ "libc",
+ "log",
+ "mshv-bindings",
+ "mshv-ioctls",
+ "thiserror 1.0.69",
+ "vfio-bindings",
+ "vm-memory",
+ "vmm-sys-util",
+]
+
+[[package]]
 name = "vhost"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1593,6 +1698,18 @@ checksum = "5e4ce718bd4e8d74b1747363e27f715a6b1bd6971597cb21425dadbf4e712241"
 dependencies = [
  "libc",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "vm-device"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "thiserror 1.0.69",
+ "vfio-ioctls",
+ "vm-memory",
+ "vmm-sys-util",
 ]
 
 [[package]]
@@ -1617,6 +1734,14 @@ name = "vm-superio"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3428ee25acbfc75ed14600f2043876e0889cbd57c39dd441191417377cdceda0"
+
+[[package]]
+name = "vm-system-allocator"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "vm-memory",
+]
 
 [[package]]
 name = "vmm"

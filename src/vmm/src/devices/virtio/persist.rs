@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use super::queue::QueueError;
 use crate::devices::virtio::device::VirtioDevice;
 use crate::devices::virtio::generated::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
-use crate::devices::virtio::mmio::MmioTransport;
 use crate::devices::virtio::queue::Queue;
+use crate::devices::virtio::transport::MmioTransport;
 use crate::snapshot::Persist;
 use crate::vstate::memory::{GuestAddress, GuestMemoryMmap};
 

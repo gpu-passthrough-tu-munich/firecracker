@@ -6,6 +6,7 @@
 
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
+use std::sync::Arc;
 
 use vhost::vhost_user::message::*;
 use vhost::vhost_user::{Frontend, VhostUserFrontend};
@@ -13,6 +14,7 @@ use vhost::{Error as VhostError, VhostBackend, VhostUserMemoryRegionInfo, VringC
 use vm_memory::{Address, Error as MmapError, GuestMemory, GuestMemoryError, GuestMemoryRegion};
 use vmm_sys_util::eventfd::EventFd;
 
+use super::device::{VirtioInterrupt, VirtioInterruptType};
 use crate::devices::virtio::device::IrqTrigger;
 use crate::devices::virtio::queue::Queue;
 use crate::vstate::memory::GuestMemoryMmap;
@@ -400,7 +402,7 @@ impl<T: VhostUserHandleBackend> VhostUserHandleImpl<T> {
         &mut self,
         mem: &GuestMemoryMmap,
         queues: &[(usize, &Queue, &EventFd)],
-        irq_trigger: &IrqTrigger,
+        interrupt: Arc<dyn VirtioInterrupt>,
     ) -> Result<(), VhostUserError> {
         // Provide the memory table to the backend.
         self.update_mem_table(mem)?;
@@ -442,7 +444,12 @@ impl<T: VhostUserHandleBackend> VhostUserHandleImpl<T> {
             // No matter the queue, we set irq_evt for signaling the guest that buffers were
             // consumed.
             self.vu
-                .set_vring_call(*queue_index, &irq_trigger.irq_evt)
+                .set_vring_call(
+                    *queue_index,
+                    &interrupt
+                        .notifier(VirtioInterruptType::Queue(*queue_index as u16))
+                        .expect("vring irq should be initialized"),
+                )
                 .map_err(VhostUserError::VhostUserSetVringCall)?;
 
             self.vu

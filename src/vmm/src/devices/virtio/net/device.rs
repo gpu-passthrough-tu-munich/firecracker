@@ -15,7 +15,9 @@ use log::error;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::NET_QUEUE_MAX_SIZE;
-use crate::devices::virtio::device::{DeviceState, IrqTrigger, IrqType, VirtioDevice};
+use crate::devices::virtio::device::{
+    DeviceState, IrqTrigger, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
+};
 use crate::devices::virtio::generated::virtio_config::VIRTIO_F_VERSION_1;
 use crate::devices::virtio::generated::virtio_net::{
     VIRTIO_NET_F_CSUM, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_TSO6,
@@ -249,7 +251,7 @@ pub struct Net {
 
     tx_frame_headers: [u8; frame_hdr_len()],
 
-    pub(crate) irq_trigger: IrqTrigger,
+    pub(crate) virtio_interrupt: Option<Arc<dyn VirtioInterrupt>>,
 
     pub(crate) config_space: ConfigSpace,
     pub(crate) guest_mac: Option<MacAddr>,
@@ -313,7 +315,7 @@ impl Net {
             tx_rate_limiter,
             rx_frame_buf: [0u8; MAX_BUFFER_SIZE],
             tx_frame_headers: [0u8; frame_hdr_len()],
-            irq_trigger: IrqTrigger::new().map_err(NetError::EventFd)?,
+            virtio_interrupt: Some(Arc::new(IrqTrigger::new().map_err(NetError::EventFd)?)),
             config_space,
             guest_mac,
             device_state: DeviceState::Inactive,
@@ -392,14 +394,17 @@ impl Net {
     /// https://docs.oasis-open.org/virtio/virtio/v1.1/csprd01/virtio-v1.1-csprd01.html#x1-320005
     /// 2.6.7.1 Driver Requirements: Used Buffer Notification Suppression
     fn try_signal_queue(&mut self, queue_type: NetQueue) -> Result<(), DeviceError> {
-        let queue = match queue_type {
-            NetQueue::Rx => &mut self.queues[RX_INDEX],
-            NetQueue::Tx => &mut self.queues[TX_INDEX],
+        let queue_index = match queue_type {
+            NetQueue::Rx => RX_INDEX,
+            NetQueue::Tx => TX_INDEX,
         };
+        let queue = &mut self.queues[queue_index];
 
         if queue.prepare_kick() {
-            self.irq_trigger
-                .trigger_irq(IrqType::Vring)
+            self.virtio_interrupt
+                .as_ref()
+                .expect("interrupt must be setup")
+                .trigger(VirtioInterruptType::Queue(queue_index as u16))
                 .map_err(|err| {
                     self.metrics.event_fails.inc();
                     DeviceError::FailedSignalingIrq(err)
@@ -962,8 +967,11 @@ impl VirtioDevice for Net {
         &self.queue_evts
     }
 
-    fn interrupt_trigger(&self) -> &IrqTrigger {
-        &self.irq_trigger
+    fn interrupt(&self) -> Arc<dyn VirtioInterrupt> {
+        self.virtio_interrupt
+            .as_ref()
+            .expect("interrupt must be set up")
+            .clone()
     }
     fn read_config(&self, offset: u64, data: &mut [u8]) {
         if let Some(config_space_bytes) = self.config_space.as_slice().get(u64_to_usize(offset)..) {
@@ -993,7 +1001,13 @@ impl VirtioDevice for Net {
         self.metrics.mac_address_updates.inc();
     }
 
-    fn activate(&mut self, mem: GuestMemoryMmap) -> Result<(), ActivateError> {
+    fn activate(
+        &mut self,
+        mem: GuestMemoryMmap,
+        virtio_interrupt: Option<Arc<dyn VirtioInterrupt>>,
+    ) -> Result<(), ActivateError> {
+        self.virtio_interrupt = virtio_interrupt.or(self.virtio_interrupt.take());
+
         for q in self.queues.iter_mut() {
             q.initialize(&mem)
                 .map_err(ActivateError::QueueMemoryError)?;

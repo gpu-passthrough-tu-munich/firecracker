@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 use log::error;
@@ -24,7 +25,7 @@ use super::{
     VIRTIO_BALLOON_S_SWAP_OUT,
 };
 use crate::devices::virtio::balloon::BalloonError;
-use crate::devices::virtio::device::{IrqTrigger, IrqType};
+use crate::devices::virtio::device::{IrqTrigger, VirtioInterrupt, VirtioInterruptType};
 use crate::devices::virtio::generated::virtio_config::VIRTIO_F_VERSION_1;
 use crate::logger::IncMetric;
 use crate::utils::u64_to_usize;
@@ -161,7 +162,7 @@ pub struct Balloon {
     pub(crate) queues: Vec<Queue>,
     pub(crate) queue_evts: [EventFd; BALLOON_NUM_QUEUES],
     pub(crate) device_state: DeviceState,
-    pub(crate) irq_trigger: IrqTrigger,
+    pub(crate) virtio_interrupt: Option<Arc<dyn VirtioInterrupt>>,
 
     // Implementation specific fields.
     pub(crate) restored_from_file: bool,
@@ -188,7 +189,6 @@ impl fmt::Debug for Balloon {
             .field("queues", &self.queues)
             .field("queue_evts", &self.queue_evts)
             .field("device_state", &self.device_state)
-            .field("irq_trigger", &self.irq_trigger)
             .field("restored_from_file", &self.restored_from_file)
             .field("stats_polling_interval_s", &self.stats_polling_interval_s)
             .field("stats_desc_index", &self.stats_desc_index)
@@ -242,7 +242,7 @@ impl Balloon {
             },
             queue_evts,
             queues,
-            irq_trigger: IrqTrigger::new().map_err(BalloonError::EventFd)?,
+            virtio_interrupt: Some(Arc::new(IrqTrigger::new().map_err(BalloonError::EventFd)?)),
             device_state: DeviceState::Inactive,
             activate_evt: EventFd::new(libc::EFD_NONBLOCK).map_err(BalloonError::EventFd)?,
             restored_from_file,
@@ -363,7 +363,7 @@ impl Balloon {
         }
 
         if needs_interrupt {
-            self.signal_used_queue()?;
+            self.signal_used_queue(INFLATE_INDEX)?;
         }
 
         Ok(())
@@ -381,7 +381,7 @@ impl Balloon {
         }
 
         if needs_interrupt {
-            self.signal_used_queue()
+            self.signal_used_queue(DEFLATE_INDEX)
         } else {
             Ok(())
         }
@@ -425,11 +425,15 @@ impl Balloon {
         Ok(())
     }
 
-    pub(crate) fn signal_used_queue(&self) -> Result<(), BalloonError> {
-        self.irq_trigger.trigger_irq(IrqType::Vring).map_err(|err| {
-            METRICS.event_fails.inc();
-            BalloonError::InterruptError(err)
-        })
+    pub(crate) fn signal_used_queue(&self, queue_index: usize) -> Result<(), BalloonError> {
+        self.virtio_interrupt
+            .as_ref()
+            .expect("queue should be initialized")
+            .trigger(VirtioInterruptType::Queue(queue_index as u16))
+            .map_err(|err| {
+                METRICS.event_fails.inc();
+                BalloonError::InterruptError(err)
+            })
     }
 
     /// Process device virtio queue(s).
@@ -450,7 +454,7 @@ impl Balloon {
             self.queues[STATS_INDEX]
                 .add_used(index, 0)
                 .map_err(BalloonError::Queue)?;
-            self.signal_used_queue()
+            self.signal_used_queue(STATS_INDEX)
         } else {
             error!("Failed to update balloon stats, missing descriptor.");
             Ok(())
@@ -461,8 +465,10 @@ impl Balloon {
     pub fn update_size(&mut self, amount_mib: u32) -> Result<(), BalloonError> {
         if self.is_activated() {
             self.config_space.num_pages = mib_to_pages(amount_mib)?;
-            self.irq_trigger
-                .trigger_irq(IrqType::Config)
+            self.virtio_interrupt
+                .as_ref()
+                .expect("queue should be initialized")
+                .trigger(VirtioInterruptType::Config)
                 .map_err(BalloonError::InterruptError)
         } else {
             Err(BalloonError::DeviceNotActive)
@@ -573,8 +579,11 @@ impl VirtioDevice for Balloon {
         &self.queue_evts
     }
 
-    fn interrupt_trigger(&self) -> &IrqTrigger {
-        &self.irq_trigger
+    fn interrupt(&self) -> Arc<dyn VirtioInterrupt> {
+        self.virtio_interrupt
+            .as_ref()
+            .expect("queue should be initialized")
+            .clone()
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {
@@ -601,7 +610,12 @@ impl VirtioDevice for Balloon {
         dst.copy_from_slice(data);
     }
 
-    fn activate(&mut self, mem: GuestMemoryMmap) -> Result<(), ActivateError> {
+    fn activate(
+        &mut self,
+        mem: GuestMemoryMmap,
+        virtio_interrupt: Option<Arc<dyn VirtioInterrupt>>,
+    ) -> Result<(), ActivateError> {
+        self.virtio_interrupt = virtio_interrupt.or(self.virtio_interrupt.take());
         for q in self.queues.iter_mut() {
             q.initialize(&mem)
                 .map_err(ActivateError::QueueMemoryError)?;
@@ -635,6 +649,7 @@ pub(crate) mod tests {
     use crate::devices::virtio::balloon::test_utils::{
         check_request_completion, invoke_handler_for_queue_event, set_request,
     };
+    use crate::devices::virtio::generated::virtio_config::VIRTIO_F_VERSION_1;
     use crate::devices::virtio::queue::{VIRTQ_DESC_F_NEXT, VIRTQ_DESC_F_WRITE};
     use crate::devices::virtio::test_utils::{VirtQueue, default_mem};
     use crate::test_utils::single_region_mem;
