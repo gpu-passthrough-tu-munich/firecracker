@@ -524,8 +524,8 @@
                 "comment": "sigaltstack is used by Rust stdlib to remove alternative signal stack during thread teardown."
             },
             {
-              "syscall": "getrandom",
-              "comment": "getrandom is used by `HttpServer` to reinialize `HashMap` after moving to the API thread"
+                "syscall": "getrandom",
+                "comment": "getrandom is used by `HttpServer` to reinialize `HashMap` after moving to the API thread"
             },
             {
                 "syscall": "accept4",
@@ -1135,6 +1135,42 @@
                         "op": "eq",
                         "val": 44717,
                         "comment": "KVM_KVMCLOCK_CTRL. We call this after pausing vCPUs to avoid soft lockups in the guest."
+                    }
+                ]
+            },
+            {
+                "syscall": "ioctl",
+                "args": [
+                    {
+                        "index": 1,
+                        "type": "dword",
+                        "op": "eq",
+                        "val": 1074310762,
+                        "comment": "KVM_SET_GSI_ROUTING. Used to enable a PCI device."
+                    }
+                ]
+            },
+            {
+                "syscall": "ioctl",
+                "args": [
+                    {
+                        "index": 1,
+                        "type": "dword",
+                        "op": "eq",
+                        "val": 1075883638,
+                        "comment": "KVM_IRQFD. Used to enable a PCI device."
+                    }
+                ]
+            },
+            {
+                "syscall": "ioctl",
+                "args": [
+                    {
+                        "index": 1,
+                        "type": "dword",
+                        "op": "eq",
+                        "val": 1077980793,
+                        "comment": "KVM_IOEVENTFD. Used by PCI Bar relocation."
                     }
                 ]
             },

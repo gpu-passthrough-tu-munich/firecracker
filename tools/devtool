@@ -410,6 +410,8 @@ cmd_help() {
     echo "    download_ci_artifacts [--force]"
     echo "        Downloads the CI artifacts used for testing from our S3 bucket. If --force is passed, purges any existing"
     echo "        artifacts first. Useful for refreshing local artifacts after an update, or if something got messed up."
+    echo "    setup_local_ci_artifacts"
+    echo "        Copies and setups the artifacts built using "build_ci_artifacts" to use them with the devtool commands"
     echo ""
 
     cat <<EOF
@@ -569,8 +571,7 @@ ensure_ci_artifacts() {
 
     # Fetch all the artifacts so they are local
     say "Fetching CI artifacts from S3"
-    FC_VERSION=$(cmd_sh "cd src/firecracker/src; cargo pkgid | cut -d# -f2 | cut -d. -f1-2")
-    S3_URL=s3://spec.ccfc.min/firecracker-ci/v$FC_VERSION/$(uname -m)
+    S3_URL=s3://spec.ccfc.min/firecracker-ci/v1.12-pcie-poc/$(uname -m)
     ARTIFACTS=$MICROVM_IMAGES_DIR/$(uname -m)
     if [ ! -d "$ARTIFACTS" ]; then
         mkdir -pv $ARTIFACTS
@@ -1081,6 +1082,14 @@ cmd_build_ci_artifacts() {
     cmd_fix_perms
 }
 
+cmd_setup_local_ci_artifacts() {
+    LOCAL_ARTIFACTS="resources/$(uname -m)"
+    ARTIFACTS=$MICROVM_IMAGES_DIR/$(uname -m)
+    rm -rfv "$ARTIFACTS" 
+    mkdir -pv "$ARTIFACTS"
+    cp -ruvf "$LOCAL_ARTIFACTS/" "$MICROVM_IMAGES_DIR"
+    cmd_sh "./tools/setup-ci-artifacts.sh"
+}
 
 main() {
 
