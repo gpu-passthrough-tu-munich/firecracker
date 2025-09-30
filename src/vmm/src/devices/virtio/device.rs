@@ -32,6 +32,12 @@ pub trait VirtioInterrupt: Send + Sync {
     }
 }
 
+impl Debug for dyn VirtioInterrupt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "VirtioInterrupt")
+    }
+}
+
 /// Enum that indicates if a VirtioDevice is inactive or has been activated
 /// and memory attached to it.
 #[derive(Debug)]
